@@ -1,0 +1,292 @@
+import cv2
+import numpy as np
+import tkinter as tk
+from PIL import Image, ImageTk
+
+# Global dictionary to store ball positions (or detection status)
+ball_positions = {"Red": None, "Green": None, "Blue": None}
+# Global variable to store the latest camera frame height (for mapping)
+last_frame_height = 500  # default; will update dynamically
+
+# ---------------------------
+# User Adjustable Variables
+# ---------------------------
+ruler_font_size = 12  # Font size for the ruler numbers
+
+# Open the default camera
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise Exception("Error: Could not open the camera.")
+
+# Define HSV ranges for the colors
+lower_red1 = np.array([0, 120, 70])
+upper_red1 = np.array([10, 255, 255])
+lower_red2 = np.array([170, 120, 70])
+upper_red2 = np.array([180, 255, 255])
+lower_green = np.array([36, 100, 100])
+upper_green = np.array([86, 255, 255])
+lower_blue = np.array([94, 80, 2])
+upper_blue = np.array([126, 255, 255])
+
+# Define a kernel for morphological operations (for noise reduction)
+kernel = np.ones((5, 5), np.uint8)
+
+def process_mask(mask):
+    """Apply morphological operations to reduce noise."""
+    mask = cv2.erode(mask, kernel, iterations=2)
+    mask = cv2.dilate(mask, kernel, iterations=2)
+    return mask
+
+def detect_ball(mask, label, draw_color, frame):
+    """
+    Detect the largest contour in the mask, draw a circle and label on the frame,
+    and update the ball_positions dictionary.
+    """
+    global ball_positions
+    mask = process_mask(mask)
+    contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    pos = None
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        ((x, y), radius) = cv2.minEnclosingCircle(c)
+        if radius > 10:
+            cv2.circle(frame, (int(x), int(y)), int(radius), draw_color, 2)
+            cv2.putText(frame, label, (int(x - radius), int(y - radius)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, draw_color, 2)
+            pos = (int(x), int(y))
+    ball_positions[label] = pos
+    return frame
+
+def draw_ruler():
+    """
+    Draw a vertical ruler along the right edge of the canvas that spans the full canvas height.
+    The scale runs from 100 at the top to 0 at the bottom.
+    The label for 100 is placed above its tick mark, and the label for 0 is placed below its tick mark.
+    """
+    ruler_area_height = canvas_height  # Use the full canvas height
+    ruler_x = canvas_width - 40        # Place the ruler 40 pixels from the right edge.
+    left_canvas.create_line(ruler_x, 0, ruler_x, ruler_area_height, width=10, fill="#ffffff")
+    
+    # Offsets for labels
+    label_offset_top = 10    # For value 100: shift upward
+    label_offset_bottom = 12  # For value 0: shift downward
+    label_offset_default = 4  # For other values
+    
+    for value in range(0, 101, 10):
+        # Map value so that 100 maps to y=0 and 0 maps to y=canvas_height.
+        y = (1 - value / 100) * ruler_area_height
+        if value == 100:
+            label_y = y + label_offset_top
+        elif value == 0:
+            label_y = y + label_offset_bottom
+        else:
+            label_y = y + label_offset_default
+        left_canvas.create_line(ruler_x - 50, y, ruler_x, y, width=4, fill="#ffffff")
+        left_canvas.create_text(ruler_x + 25, label_y, text=str(value),
+                                  font=("Segoe UI", ruler_font_size), fill="#ffffff")
+
+def update_left_panel():
+    """
+    Update the left panel ball indicators based on detection.
+    Each ball indicator is moved vertically by mapping its camera y-coordinate (normalized to 0–100)
+    onto the canvas height using a direct mapping.
+    
+    The percentage is computed so that a ball at the top (y = 0) corresponds to 100%,
+    and a ball at the bottom corresponds to 0%.
+    
+    If a ball is not detected, its default position is set to 0 (top of the canvas).
+    Also calculates and updates the breathing average.
+    """
+    def get_new_center(ball_label):
+        if ball_positions[ball_label]:
+            normalized = ball_positions[ball_label][1] / last_frame_height
+            normalized = max(0, min(normalized, 1))
+            return normalized * canvas_height
+        else:
+            return 0
+
+    # Double the size: New diameter = 80 pixels; new radius = 40.
+    radius = 40
+    red_center_y = get_new_center("Red")
+    green_center_y = get_new_center("Green")
+    blue_center_y = get_new_center("Blue")
+    
+    left_canvas.coords(red_circle, 70, red_center_y - radius, 150, red_center_y + radius)
+    left_canvas.itemconfig(red_circle, fill="red" if ball_positions["Red"] else "white")
+    
+    left_canvas.coords(green_circle, 190, green_center_y - radius, 270, green_center_y + radius)
+    left_canvas.itemconfig(green_circle, fill="green" if ball_positions["Green"] else "white")
+    
+    left_canvas.coords(blue_circle, 310, blue_center_y - radius, 390, blue_center_y + radius)
+    left_canvas.itemconfig(blue_circle, fill="blue" if ball_positions["Blue"] else "white")
+    
+    # Calculate percentage: 100% at top (y = 0), 0% at bottom.
+    if ball_positions["Red"]:
+        red_percent = int(round((1 - (ball_positions["Red"][1] / last_frame_height)) * 100))
+    else:
+        red_percent = 100
+    if ball_positions["Green"]:
+        green_percent = int(round((1 - (ball_positions["Green"][1] / last_frame_height)) * 100))
+    else:
+        green_percent = 100
+    if ball_positions["Blue"]:
+        blue_percent = int(round((1 - (ball_positions["Blue"][1] / last_frame_height)) * 100))
+    else:
+        blue_percent = 100
+    
+    red_percent_label.config(text=f"Red: {red_percent}%", bg="#1a2a5a", fg="#ffffff")
+    green_percent_label.config(text=f"Green: {green_percent}%", bg="#1a2a5a", fg="#ffffff")
+    blue_percent_label.config(text=f"Blue: {blue_percent}%", bg="#1a2a5a", fg="#ffffff")
+    
+    breathing_average = int(round((red_percent + green_percent + blue_percent) / 3))
+    breathing_average_label.config(text=f"Your Breathing average is : {breathing_average}%", bg="#1a2a5a", fg="#ffffff")
+
+def update_frame():
+    """
+    Capture a frame from the camera, process it to detect colored balls,
+    update the video feed and text labels, and update the left panel.
+    """
+    global last_frame_height
+
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: Could not read frame from camera.")
+        root.after(10, update_frame)
+        return
+
+    last_frame_height = frame.shape[0]
+    
+    frame = cv2.flip(frame, 1)
+    blurred = cv2.GaussianBlur(frame, (11, 11), 0)
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    
+    mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+    mask_green = cv2.inRange(hsv, lower_green, upper_green)
+    mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+    
+    frame = detect_ball(mask_red, "Red", (0, 0, 255), frame)
+    frame = detect_ball(mask_green, "Green", (0, 255, 0), frame)
+    frame = detect_ball(mask_blue, "Blue", (255, 0, 0), frame)
+    
+    cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(cv2image)
+    imgtk = ImageTk.PhotoImage(image=img)
+    video_label.imgtk = imgtk
+    video_label.configure(image=imgtk)
+    
+    red_label.config(text=f"Red Ball: {ball_positions['Red']}" if ball_positions["Red"] else "Red Ball: Not detected", bg="#1a2a5a", fg="#ffffff")
+    green_label.config(text=f"Green Ball: {ball_positions['Green']}" if ball_positions["Green"] else "Green Ball: Not detected", bg="#1a2a5a", fg="#ffffff")
+    blue_label.config(text=f"Blue Ball: {ball_positions['Blue']}" if ball_positions["Blue"] else "Blue Ball: Not detected", bg="#1a2a5a", fg="#ffffff")
+    
+    update_left_panel()
+    
+    root.after(10, update_frame)
+
+def on_closing():
+    """Release the camera and close the GUI."""
+    cap.release()
+    root.destroy()
+
+# ---------------------------
+# Set up the Tkinter GUI with a dark blue modern design
+# ---------------------------
+root = tk.Tk()
+root.title("Respiratory Therapy Device")
+root.configure(bg="#1a2a5a")
+
+main_frame = tk.Frame(root, bg="#1a2a5a")
+main_frame.pack(padx=20, pady=20)
+
+# ---------------------------
+# Right Panel Header: Logo and Title
+# ---------------------------
+# Create a header frame for the logos and title.
+header_frame = tk.Frame(main_frame, bg="#1a2a5a")
+header_frame.pack(side="top", fill="x", pady=(0,20))
+
+# Load logo images. Make sure "qstss.png" and "moe.png" exist in your working directory.
+try:
+    logo_left = Image.open("qstss.png")
+    logo_right = Image.open("moe.png")
+except Exception as e:
+    print("Error loading logo images:", e)
+    logo_left = Image.new("RGB", (50, 50), color="#ffffff")
+    logo_right = Image.new("RGB", (50, 50), color="#ffffff")
+
+# Resize logos as desired.
+logo_left = logo_left.resize((200, 70))
+logo_right = logo_right.resize((200, 70))
+logo_left_img = ImageTk.PhotoImage(logo_left)
+logo_right_img = ImageTk.PhotoImage(logo_right)
+
+# Place the left logo.
+left_logo_label = tk.Label(header_frame, image=logo_left_img, bg="#1a2a5a")
+left_logo_label.pack(side="left", padx=10)
+# Place the title.
+title_label = tk.Label(header_frame, text="Respiratory Therapy Device", font=("Segoe UI", 22, "bold"), bg="#1a2a5a", fg="#ffffff")
+title_label.pack(side="left", padx=20)
+# Place the right logo.
+right_logo_label = tk.Label(header_frame, image=logo_right_img, bg="#1a2a5a")
+right_logo_label.pack(side="left", padx=10)
+
+# ---------------------------
+# Left Panel: Canvas with a Ruler, Percentage Labels, and Ball Indicators
+# ---------------------------
+canvas_width = 1000
+canvas_height = 700  # Defines the area for ball indicators.
+left_panel = tk.Frame(main_frame, bg="#1a2a5a")
+left_panel.pack(side="left", padx=10)
+
+# Create a frame above the canvas for the breathing average and percentage labels.
+percent_frame = tk.Frame(left_panel, bg="#1a2a5a")
+percent_frame.pack(side="top", fill="x", pady=(0,10))
+
+breathing_average_label = tk.Label(percent_frame, text="Your Breathing average is : 0%", font=("Segoe UI", 25, "bold"), bg="#1a2a5a", fg="#ffffff")
+breathing_average_label.pack(side="top", pady=(0,10))
+
+red_percent_label = tk.Label(percent_frame, text="Red: 100%", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+red_percent_label.pack(side="left", padx=5)
+green_percent_label = tk.Label(percent_frame, text="Green: 100%", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+green_percent_label.pack(side="left", padx=5)
+blue_percent_label = tk.Label(percent_frame, text="Blue: 100%", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+blue_percent_label.pack(side="left", padx=5)
+
+left_canvas = tk.Canvas(left_panel, width=canvas_width, height=canvas_height, bg="#1a2a5a", highlightthickness=0)
+left_canvas.pack()
+
+draw_ruler()
+
+default_center = canvas_height / 2
+# Create ball indicator circles with doubled size (radius = 40, diameter = 80).
+red_circle = left_canvas.create_oval(70, default_center - 40, 150, default_center + 40,
+                                       fill="white", outline="red", width=3)
+green_circle = left_canvas.create_oval(190, default_center - 40, 270, default_center + 40,
+                                         fill="white", outline="green", width=3)
+blue_circle = left_canvas.create_oval(310, default_center - 40, 390, default_center + 40,
+                                        fill="white", outline="blue", width=3)
+
+# ---------------------------
+# Right Panel: Camera Feed and Info Labels
+# ---------------------------
+right_panel = tk.Frame(main_frame, bg="#1a2a5a")
+right_panel.pack(side="right", padx=10)
+
+video_label = tk.Label(right_panel, bg="black")
+video_label.pack(padx=10, pady=10)
+
+info_frame = tk.Frame(right_panel, bg="#1a2a5a")
+info_frame.pack(pady=10)
+
+red_label = tk.Label(info_frame, text="Red Ball: Not detected", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+red_label.pack(pady=5)
+green_label = tk.Label(info_frame, text="Green Ball: Not detected", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+green_label.pack(pady=5)
+blue_label = tk.Label(info_frame, text="Blue Ball: Not detected", font=("Segoe UI", 14), bg="#1a2a5a", fg="#ffffff")
+blue_label.pack(pady=5)
+
+root.after(0, update_frame)
+root.protocol("WM_DELETE_WINDOW", on_closing)
+root.mainloop()
+
