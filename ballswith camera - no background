@@ -282,7 +282,7 @@ class RespiratoryTherapyApp:
         cam_image = Image.fromarray(cam_rgb)
         cam_image = cam_image.resize((CAMERA_FRAME_SIZE, CAMERA_FRAME_SIZE))
         self.camera_photo = ImageTk.PhotoImage(cam_image)
-        center_x = RULER_X + 50 + (CANVAS_WIDTH - (RULER_X + 50)) // 2
+        center_x = RULER_X - 50 + (CANVAS_WIDTH - (RULER_X + 50)) // 2
         center_y = CANVAS_HEIGHT // 2
         if self.camera_image_id is None:
             self.camera_image_id = self.canvas.create_image(center_x, center_y, image=self.camera_photo)
